@@ -25,6 +25,11 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.usart_connect.SerialViewModel
 import com.example.usart_connect.serial.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,6 +56,10 @@ fun SerialScreen(vm: SerialViewModel = viewModel()) {
     val sendMode by vm.sendMode.collectAsState()
     val lineEnding by vm.lineEnding.collectAsState()
     val statusMessage by vm.statusMessage.collectAsState()
+    val quickCommands by vm.quickCommands.collectAsState()
+    val networkDevices by vm.networkDevices.collectAsState()
+    val showNetworkPanel by vm.showNetworkPanel.collectAsState()
+    var showConfigPanel by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     val btPermissionLauncher = rememberLauncherForActivityResult(
@@ -81,14 +90,23 @@ fun SerialScreen(vm: SerialViewModel = viewModel()) {
     if (isLandscape) {
         // 横屏：左右布局
         Row(modifier = Modifier.fillMaxSize().padding(padding)) {
-            // 左侧：连接 + 参数 + 发送（可滚动）
+            // 左侧：连接 + 参数 + 快捷指令 + 网卡 + 发送（可滚动）
             Column(modifier = Modifier.weight(0.4f).fillMaxHeight().verticalScroll(rememberScrollState())) {
                 ConnectionCard(connectionType, devices, selectedDevice, isConnected, statusMessage,
                     { if (connectionType == ConnectionTypes.BLUETOOTH) checkBtAndScan() else vm.scanDevices() },
-                    { vm.setConnectionType(it) }, { vm.selectDevice(it) }, { vm.connect() }, { vm.disconnect() })
+                    { vm.setConnectionType(it) }, { vm.selectDevice(it) }, { vm.connect() }, { vm.disconnect() },
+                    showNetworkPanel, { vm.toggleNetworkPanel() })
                 Spacer(Modifier.height(cardSpacing))
-                ConfigCard(serialConfig, isConnected) { vm.updateConfig(it) }
+                ConfigCard(serialConfig, isConnected, showConfigPanel, { showConfigPanel = it }) { vm.updateConfig(it) }
                 Spacer(Modifier.height(cardSpacing))
+                QuickCommandCard(quickCommands, isConnected,
+                    { vm.sendQuickCommand(it) }, { vm.addQuickCommand(it.name, it.command, it.isHex) }, { vm.removeQuickCommand(it) },
+                    { vm.exportCommands() }, { vm.importCommands(it) })
+                Spacer(Modifier.height(cardSpacing))
+                if (showNetworkPanel) {
+                    NetworkCard(networkDevices) { vm.scanNetworkDevices() }
+                    Spacer(Modifier.height(cardSpacing))
+                }
                 SendCard(sendText, sendMode, lineEnding, isConnected,
                     { vm.setSendText(it) }, { vm.setSendMode(it) }, { vm.setLineEnding(it) }, { vm.send() })
             }
@@ -102,10 +120,19 @@ fun SerialScreen(vm: SerialViewModel = viewModel()) {
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             ConnectionCard(connectionType, devices, selectedDevice, isConnected, statusMessage,
                 { if (connectionType == ConnectionTypes.BLUETOOTH) checkBtAndScan() else vm.scanDevices() },
-                { vm.setConnectionType(it) }, { vm.selectDevice(it) }, { vm.connect() }, { vm.disconnect() })
+                { vm.setConnectionType(it) }, { vm.selectDevice(it) }, { vm.connect() }, { vm.disconnect() },
+                showNetworkPanel, { vm.toggleNetworkPanel() })
             Spacer(Modifier.height(cardSpacing))
-            ConfigCard(serialConfig, isConnected) { vm.updateConfig(it) }
+            ConfigCard(serialConfig, isConnected, showConfigPanel, { showConfigPanel = it }) { vm.updateConfig(it) }
             Spacer(Modifier.height(cardSpacing))
+            QuickCommandCard(quickCommands, isConnected,
+                { vm.sendQuickCommand(it) }, { vm.addQuickCommand(it.name, it.command, it.isHex) }, { vm.removeQuickCommand(it) },
+                { vm.exportCommands() }, { vm.importCommands(it) })
+            Spacer(Modifier.height(cardSpacing))
+            if (showNetworkPanel) {
+                NetworkCard(networkDevices) { vm.scanNetworkDevices() }
+                Spacer(Modifier.height(cardSpacing))
+            }
             ReceiveCard(receivedText, receiveMode, scrollState, { vm.setReceiveMode(it) }, { vm.clearReceived() },
                 modifier = Modifier.weight(1f))
             Spacer(Modifier.height(cardSpacing))
@@ -129,7 +156,9 @@ private fun ConnectionCard(
     onTypeChange: (String) -> Unit,
     onDeviceSelect: (DeviceItem) -> Unit,
     onConnect: () -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    showNetworkPanel: Boolean = false,
+    onToggleNetwork: () -> Unit = {}
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(10.dp)) {
@@ -145,6 +174,7 @@ private fun ConnectionCard(
                     Text("蓝牙", style = MaterialTheme.typography.bodySmall)
                 }
                 Spacer(Modifier.weight(1f))
+                TextButton(onClick = onToggleNetwork) { Text(if (showNetworkPanel) "隐藏网卡" else "网卡") }
                 TextButton(onClick = onScan, enabled = !isConnected) { Text("扫描") }
             }
             Spacer(Modifier.height(6.dp))
@@ -179,53 +209,345 @@ private fun ConnectionCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ConfigCard(config: SerialConfig, isConnected: Boolean, onConfigChange: (SerialConfig) -> Unit) {
+private fun ConfigCard(
+    config: SerialConfig,
+    isConnected: Boolean,
+    expanded: Boolean = true,
+    onExpandedChange: (Boolean) -> Unit = {},
+    onConfigChange: (SerialConfig) -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(10.dp)) {
-            Text("串口参数", style = MaterialTheme.typography.labelMedium)
-            Spacer(Modifier.height(6.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                var baudExpanded by remember { mutableStateOf(false) }
-                val baudRates = listOf(300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600)
-                ExposedDropdownMenuBox(baudExpanded, { baudExpanded = it && !isConnected }, Modifier.weight(1f)) {
-                    OutlinedTextField(value = config.baudRate.toString(), onValueChange = { it.toIntOrNull()?.let { v -> onConfigChange(config.copy(baudRate = v)) } },
-                        label = { Text("波特率") }, enabled = !isConnected, singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(baudExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
-                    ExposedDropdownMenu(baudExpanded, { baudExpanded = false }) {
-                        for (r in baudRates) DropdownMenuItem(text = { Text(r.toString()) }, onClick = { onConfigChange(config.copy(baudRate = r)); baudExpanded = false })
-                    }
-                }
-                var dbExpanded by remember { mutableStateOf(false) }
-                ExposedDropdownMenuBox(dbExpanded, { dbExpanded = it && !isConnected }, Modifier.weight(1f)) {
-                    OutlinedTextField(value = config.dataBits.toString(), onValueChange = {}, readOnly = true, label = { Text("数据位") }, enabled = !isConnected,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(dbExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
-                    ExposedDropdownMenu(dbExpanded, { dbExpanded = false }) {
-                        for (v in DataBitsValues.ALL) DropdownMenuItem(text = { Text(v.toString()) }, onClick = { onConfigChange(config.copy(dataBits = v)); dbExpanded = false })
-                    }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("串口参数", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { onExpandedChange(!expanded) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text(if (expanded) "收起" else "展开", style = MaterialTheme.typography.bodySmall)
                 }
             }
-            Spacer(Modifier.height(6.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                var sbExpanded by remember { mutableStateOf(false) }
-                ExposedDropdownMenuBox(sbExpanded, { sbExpanded = it && !isConnected }, Modifier.weight(1f)) {
-                    OutlinedTextField(value = StopBitsValues.labelOf(config.stopBits), onValueChange = {}, readOnly = true, label = { Text("停止位") }, enabled = !isConnected,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(sbExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
-                    ExposedDropdownMenu(sbExpanded, { sbExpanded = false }) {
-                        for (v in StopBitsValues.ALL) DropdownMenuItem(text = { Text(StopBitsValues.labelOf(v)) }, onClick = { onConfigChange(config.copy(stopBits = v)); sbExpanded = false })
+            if (expanded) {
+                Spacer(Modifier.height(6.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    var baudExpanded by remember { mutableStateOf(false) }
+                    val baudRates = listOf(300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600)
+                    ExposedDropdownMenuBox(baudExpanded, { baudExpanded = it && !isConnected }, Modifier.weight(1f)) {
+                        OutlinedTextField(value = config.baudRate.toString(), onValueChange = { it.toIntOrNull()?.let { v -> onConfigChange(config.copy(baudRate = v)) } },
+                            label = { Text("波特率") }, enabled = !isConnected, singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(baudExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
+                        ExposedDropdownMenu(baudExpanded, { baudExpanded = false }) {
+                            for (r in baudRates) DropdownMenuItem(text = { Text(r.toString()) }, onClick = { onConfigChange(config.copy(baudRate = r)); baudExpanded = false })
+                        }
+                    }
+                    var dbExpanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(dbExpanded, { dbExpanded = it && !isConnected }, Modifier.weight(1f)) {
+                        OutlinedTextField(value = config.dataBits.toString(), onValueChange = {}, readOnly = true, label = { Text("数据位") }, enabled = !isConnected,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(dbExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
+                        ExposedDropdownMenu(dbExpanded, { dbExpanded = false }) {
+                            for (v in DataBitsValues.ALL) DropdownMenuItem(text = { Text(v.toString()) }, onClick = { onConfigChange(config.copy(dataBits = v)); dbExpanded = false })
+                        }
                     }
                 }
-                var pExpanded by remember { mutableStateOf(false) }
-                ExposedDropdownMenuBox(pExpanded, { pExpanded = it && !isConnected }, Modifier.weight(1f)) {
-                    OutlinedTextField(value = ParityValues.labelOf(config.parity), onValueChange = {}, readOnly = true, label = { Text("校验位") }, enabled = !isConnected,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(pExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
-                    ExposedDropdownMenu(pExpanded, { pExpanded = false }) {
-                        for (v in ParityValues.ALL) DropdownMenuItem(text = { Text(ParityValues.labelOf(v)) }, onClick = { onConfigChange(config.copy(parity = v)); pExpanded = false })
+                Spacer(Modifier.height(6.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    var sbExpanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(sbExpanded, { sbExpanded = it && !isConnected }, Modifier.weight(1f)) {
+                        OutlinedTextField(value = StopBitsValues.labelOf(config.stopBits), onValueChange = {}, readOnly = true, label = { Text("停止位") }, enabled = !isConnected,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(sbExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
+                        ExposedDropdownMenu(sbExpanded, { sbExpanded = false }) {
+                            for (v in StopBitsValues.ALL) DropdownMenuItem(text = { Text(StopBitsValues.labelOf(v)) }, onClick = { onConfigChange(config.copy(stopBits = v)); sbExpanded = false })
+                        }
+                    }
+                    var pExpanded by remember { mutableStateOf(false) }
+                    ExposedDropdownMenuBox(pExpanded, { pExpanded = it && !isConnected }, Modifier.weight(1f)) {
+                        OutlinedTextField(value = ParityValues.labelOf(config.parity), onValueChange = {}, readOnly = true, label = { Text("校验位") }, enabled = !isConnected,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(pExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
+                        ExposedDropdownMenu(pExpanded, { pExpanded = false }) {
+                            for (v in ParityValues.ALL) DropdownMenuItem(text = { Text(ParityValues.labelOf(v)) }, onClick = { onConfigChange(config.copy(parity = v)); pExpanded = false })
+                        }
                     }
                 }
             }
         }
     }
+}
+
+// ==================== 网卡信息卡片 ====================
+
+@Composable
+private fun NetworkCard(
+    devices: List<NetworkDeviceInfo>,
+    onRefresh: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("网卡信息", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onRefresh, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text("刷新", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            if (devices.isEmpty()) {
+                Text("未发现网卡设备", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+            } else {
+                for (device in devices) {
+                    NetworkDeviceItem(device)
+                    if (device != devices.last()) {
+                        Spacer(Modifier.height(8.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NetworkDeviceItem(device: NetworkDeviceInfo) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // 设备名称和状态
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(device.displayName, style = MaterialTheme.typography.bodyMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            Spacer(Modifier.width(8.dp))
+            Text(if (device.isUp) "已启用" else "未启用",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (device.isUp) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+        }
+        Spacer(Modifier.height(4.dp))
+        // MAC 地址
+        InfoRow("MAC", device.macAddress)
+        // IPv4 地址
+        for ((index, ip) in device.ipAddresses.withIndex()) {
+            InfoRow(if (index == 0) "IPv4" else "", ip)
+            if (index < device.subnetMasks.size) {
+                InfoRow("掩码", device.subnetMasks[index])
+            }
+        }
+        // IPv6 地址
+        for (ip in device.ipv6Addresses.take(2)) {
+            InfoRow("IPv6", ip)
+        }
+        // 网关
+        if (device.gateway.isNotEmpty()) {
+            InfoRow("网关", device.gateway)
+        }
+        // DNS
+        for ((index, dns) in device.dnsServers.withIndex()) {
+            InfoRow(if (index == 0) "DNS" else "", dns)
+        }
+        // MTU
+        if (device.mtu > 0) {
+            InfoRow("MTU", device.mtu.toString())
+        }
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+        if (label.isNotEmpty()) {
+            Text("$label: ", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.width(40.dp))
+        } else {
+            Spacer(Modifier.width(40.dp))
+        }
+        Text(value, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            fontSize = 11.sp)
+    }
+}
+
+// ==================== 快捷指令卡片 ====================
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun QuickCommandCard(
+    commands: List<QuickCommand>,
+    isConnected: Boolean,
+    onSend: (QuickCommand) -> Unit,
+    onAdd: (QuickCommand) -> Unit,
+    onRemove: (Long) -> Unit,
+    onExport: () -> String,
+    onImport: (String) -> Int
+) {
+    var showAddDialog by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
+    var editingCommand by remember { mutableStateOf<QuickCommand?>(null) }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("快捷指令", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = { showAddDialog = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text("+ 添加", style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = { showImportDialog = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text("导入", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            if (commands.isEmpty()) {
+                Text("暂无快捷指令，点击添加", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+            } else {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(commands, key = { it.id }) { cmd ->
+                        AssistChip(
+                            onClick = { if (isConnected) onSend(cmd) },
+                            label = { Text(cmd.name, style = MaterialTheme.typography.bodySmall, maxLines = 1) },
+                            modifier = Modifier.combinedClickable(
+                                onClick = { if (isConnected) onSend(cmd) },
+                                onLongClick = { editingCommand = cmd }
+                            ),
+                            enabled = isConnected,
+                            trailingIcon = {
+                                Text(
+                                    if (cmd.isHex) "HEX" else "TXT",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // 添加指令对话框
+    if (showAddDialog) {
+        QuickCommandDialog(
+            title = "添加快捷指令",
+            initial = null,
+            onDismiss = { showAddDialog = false },
+            onConfirm = { cmd ->
+                onAdd(cmd)
+                showAddDialog = false
+            }
+        )
+    }
+
+    // 编辑/删除对话框
+    editingCommand?.let { cmd ->
+        AlertDialog(
+            onDismissRequest = { editingCommand = null },
+            title = { Text("指令操作") },
+            text = { Text("${cmd.name}\n${cmd.command}") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRemove(cmd.id)
+                    editingCommand = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingCommand = null }) { Text("取消") }
+            }
+        )
+    }
+
+    // 导入对话框
+    if (showImportDialog) {
+        ImportDialog(
+            onDismiss = { showImportDialog = false },
+            onImport = { json ->
+                val count = onImport(json)
+                showImportDialog = false
+                count
+            }
+        )
+    }
+}
+
+@Composable
+private fun QuickCommandDialog(
+    title: String,
+    initial: QuickCommand?,
+    onDismiss: () -> Unit,
+    onConfirm: (QuickCommand) -> Unit
+) {
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var command by remember { mutableStateOf(initial?.command ?: "") }
+    var isHex by remember { mutableStateOf(initial?.isHex ?: false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("名称") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = command, onValueChange = { command = it },
+                    label = { Text("指令内容") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("格式:", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.width(8.dp))
+                    FilterChip(selected = !isHex, onClick = { isHex = false }, label = { Text("ASCII") })
+                    Spacer(Modifier.width(4.dp))
+                    FilterChip(selected = isHex, onClick = { isHex = true }, label = { Text("HEX") })
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (name.isNotEmpty() && command.isNotEmpty()) onConfirm(QuickCommand(name = name, command = command, isHex = isHex)) },
+                enabled = name.isNotEmpty() && command.isNotEmpty()
+            ) { Text("确定") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+@Composable
+private fun ImportDialog(
+    onDismiss: () -> Unit,
+    onImport: (String) -> Int
+) {
+    var jsonText by remember { mutableStateOf("") }
+    var resultMessage by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("导入快捷指令") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("粘贴 JSON 格式指令:", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = jsonText, onValueChange = { jsonText = it },
+                    modifier = Modifier.fillMaxWidth().height(150.dp),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    placeholder = { Text("""[{"name":"查询","command":"AT?","isHex":false}]""", style = MaterialTheme.typography.bodySmall) }
+                )
+                if (resultMessage.isNotEmpty()) {
+                    Text(resultMessage, style = MaterialTheme.typography.bodySmall,
+                        color = if (resultMessage.startsWith("成功")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val count = onImport(jsonText)
+                resultMessage = if (count >= 0) "成功导入 $count 条指令" else "JSON 格式错误"
+            }) { Text("导入") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
+    )
 }
 
 // ==================== 接收卡片 ====================

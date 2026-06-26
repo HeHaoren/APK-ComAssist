@@ -103,3 +103,11 @@ interface SerialConnection {
     fun send(data: ByteArray): Boolean
     fun setDataListener(listener: (ByteArray) -> Unit)
 }
+
+/** 快捷指令 */
+data class QuickCommand(
+    val id: Long = System.currentTimeMillis(),
+    val name: String,
+    val command: String,
+    val isHex: Boolean = false
+)

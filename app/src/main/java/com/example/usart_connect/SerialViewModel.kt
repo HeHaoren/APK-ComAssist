@@ -1,6 +1,8 @@
 package com.example.usart_connect
 
 import android.app.Application
+import android.content.Context
+import android.content.SharedPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.usart_connect.serial.*
@@ -10,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -18,7 +22,9 @@ class SerialViewModel(application: Application) : AndroidViewModel(application) 
 
     private val usbManager = UsbSerialManager(application)
     private val btManager = BtSerialManager(application)
+    private val networkManager = NetworkManager(application)
     private var activeConnection: SerialConnection? = null
+    private val prefs: SharedPreferences = application.getSharedPreferences("quick_commands", Context.MODE_PRIVATE)
 
     // 屏幕刷新率自适应
     private var refreshRateHz: Float = 60f
@@ -27,35 +33,10 @@ class SerialViewModel(application: Application) : AndroidViewModel(application) 
     // 接收数据缓冲区（按帧率批量刷新UI）
     private val pendingData = StringBuilder()
     private var flushScheduled = false
+    private var droppedPackets = 0  // 丢弃的数据包计数
+    private val maxBufferSize = 102400  // 缓冲区最大 100KB
 
-    init {
-        usbManager.setDataListener { data ->
-            bufferReceivedData(data)
-        }
-        usbManager.registerUsbEvents { event ->
-            when (event) {
-                "detached" -> {
-                    _isConnected.value = false
-                    _statusMessage.value = "USB 已断开，等待重新插入..."
-                }
-                "attached" -> {
-                    _statusMessage.value = "USB 已重新插入，正在重连..."
-                    viewModelScope.launch(Dispatchers.IO) {
-                        Thread.sleep(800)
-                        val ok = usbManager.reconnect()
-                        if (ok) {
-                            activeConnection = usbManager
-                            _isConnected.value = true
-                            _statusMessage.value = "USB 已自动重连"
-                        } else {
-                            _statusMessage.value = "自动重连失败，请手动连接"
-                        }
-                    }
-                }
-            }
-        }
-    }
-
+    // 状态
     private val _connectionType = MutableStateFlow(ConnectionTypes.USB)
     val connectionType: StateFlow<String> = _connectionType.asStateFlow()
 
@@ -89,6 +70,46 @@ class SerialViewModel(application: Application) : AndroidViewModel(application) 
     private val _statusMessage = MutableStateFlow("")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
+    // 快捷指令
+    private val _quickCommands = MutableStateFlow<List<QuickCommand>>(emptyList())
+    val quickCommands: StateFlow<List<QuickCommand>> = _quickCommands.asStateFlow()
+
+    // 网卡设备
+    private val _networkDevices = MutableStateFlow<List<NetworkDeviceInfo>>(emptyList())
+    val networkDevices: StateFlow<List<NetworkDeviceInfo>> = _networkDevices.asStateFlow()
+
+    private val _showNetworkPanel = MutableStateFlow(false)
+    val showNetworkPanel: StateFlow<Boolean> = _showNetworkPanel.asStateFlow()
+
+    init {
+        usbManager.setDataListener { data ->
+            bufferReceivedData(data)
+        }
+        usbManager.registerUsbEvents { event ->
+            when (event) {
+                "detached" -> {
+                    _isConnected.value = false
+                    _statusMessage.value = "USB 已断开，等待重新插入..."
+                }
+                "attached" -> {
+                    _statusMessage.value = "USB 已重新插入，正在重连..."
+                    viewModelScope.launch(Dispatchers.IO) {
+                        Thread.sleep(800)
+                        val ok = usbManager.reconnect()
+                        if (ok) {
+                            activeConnection = usbManager
+                            _isConnected.value = true
+                            _statusMessage.value = "USB 已自动重连"
+                        } else {
+                            _statusMessage.value = "自动重连失败，请手动连接"
+                        }
+                    }
+                }
+            }
+        }
+        loadQuickCommands()
+    }
+
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
 
     /** 设置屏幕刷新率（由 Activity 调用） */
@@ -104,7 +125,13 @@ class SerialViewModel(application: Application) : AndroidViewModel(application) 
             else -> String(data, Charsets.UTF_8)
         }
         synchronized(pendingData) {
-            pendingData.append("[$ts] $content\n")
+            // 缓冲区超限时丢弃最早的数据
+            if (pendingData.length > maxBufferSize) {
+                val dropLen = pendingData.length - maxBufferSize / 2
+                pendingData.delete(0, dropLen)
+                droppedPackets++
+            }
+            pendingData.append("[$ts] $content\n\n")
         }
         if (!flushScheduled) {
             flushScheduled = true
@@ -117,16 +144,25 @@ class SerialViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun flushPendingData() {
         val batch: String
+        val dropped: Int
         synchronized(pendingData) {
             batch = pendingData.toString()
             pendingData.clear()
             flushScheduled = false
+            dropped = droppedPackets
+            droppedPackets = 0
         }
         if (batch.isNotEmpty()) {
-            _receivedText.value += batch
-            if (_receivedText.value.length > 50000) {
-                _receivedText.value = _receivedText.value.takeLast(40000)
+            val sb = StringBuilder(_receivedText.value.length + batch.length + 50)
+            sb.append(_receivedText.value)
+            sb.append(batch)
+            // 丢包提示
+            if (dropped > 0) {
+                sb.append("[!] 数据过快，已丢弃 $dropped 批缓冲数据\n\n")
             }
+            // 总文本超限截断
+            val text = sb.toString()
+            _receivedText.value = if (text.length > 50000) text.takeLast(40000) else text
         }
     }
 
@@ -231,6 +267,115 @@ class SerialViewModel(application: Application) : AndroidViewModel(application) 
     fun setLineEnding(ending: Int) { _lineEnding.value = ending }
     fun updateConfig(config: SerialConfig) { _config.value = config }
     fun setStatusMessage(msg: String) { _statusMessage.value = msg }
+
+    // ==================== 快捷指令管理 ====================
+
+    private fun loadQuickCommands() {
+        val json = prefs.getString("commands", "[]") ?: "[]"
+        try {
+            val arr = JSONArray(json)
+            val list = mutableListOf<QuickCommand>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(QuickCommand(
+                    id = obj.optLong("id", System.currentTimeMillis()),
+                    name = obj.getString("name"),
+                    command = obj.getString("command"),
+                    isHex = obj.optBoolean("isHex", false)
+                ))
+            }
+            _quickCommands.value = list
+        } catch (_: Exception) {
+            _quickCommands.value = emptyList()
+        }
+    }
+
+    private fun saveQuickCommands() {
+        val arr = JSONArray()
+        for (cmd in _quickCommands.value) {
+            val obj = JSONObject()
+            obj.put("id", cmd.id)
+            obj.put("name", cmd.name)
+            obj.put("command", cmd.command)
+            obj.put("isHex", cmd.isHex)
+            arr.put(obj)
+        }
+        prefs.edit().putString("commands", arr.toString()).apply()
+    }
+
+    fun addQuickCommand(name: String, command: String, isHex: Boolean) {
+        val cmd = QuickCommand(name = name, command = command, isHex = isHex)
+        _quickCommands.value = _quickCommands.value + cmd
+        saveQuickCommands()
+    }
+
+    fun removeQuickCommand(id: Long) {
+        _quickCommands.value = _quickCommands.value.filter { it.id != id }
+        saveQuickCommands()
+    }
+
+    fun sendQuickCommand(cmd: QuickCommand) {
+        val conn = activeConnection
+        if (conn == null) { _statusMessage.value = "未连接"; return }
+        if (!conn.isConnected) { _statusMessage.value = "连接已断开"; return }
+        viewModelScope.launch(Dispatchers.IO) {
+            val data = if (cmd.isHex) {
+                try {
+                    cmd.command.replace(" ", "").replace("\n", "")
+                        .chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+                } catch (_: Exception) { _statusMessage.value = "无效的 HEX 格式"; return@launch }
+            } else {
+                cmd.command.toByteArray()
+            }
+            val ok = conn.send(data)
+            _statusMessage.value = if (ok) "已发送: ${cmd.name}" else "发送失败"
+        }
+    }
+
+    fun importCommands(json: String): Int {
+        return try {
+            val arr = JSONArray(json)
+            val list = mutableListOf<QuickCommand>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                list.add(QuickCommand(
+                    name = obj.getString("name"),
+                    command = obj.getString("command"),
+                    isHex = obj.optBoolean("isHex", false)
+                ))
+            }
+            _quickCommands.value = _quickCommands.value + list
+            saveQuickCommands()
+            list.size
+        } catch (_: Exception) { -1 }
+    }
+
+    fun exportCommands(): String {
+        val arr = JSONArray()
+        for (cmd in _quickCommands.value) {
+            val obj = JSONObject()
+            obj.put("name", cmd.name)
+            obj.put("command", cmd.command)
+            obj.put("isHex", cmd.isHex)
+            arr.put(obj)
+        }
+        return arr.toString(2)
+    }
+
+    // ==================== 网卡设备管理 ====================
+
+    fun toggleNetworkPanel() {
+        _showNetworkPanel.value = !_showNetworkPanel.value
+        if (_showNetworkPanel.value) scanNetworkDevices()
+    }
+
+    fun scanNetworkDevices() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val devices = networkManager.scanNetworkDevices()
+            _networkDevices.value = devices
+            _statusMessage.value = if (devices.isEmpty()) "未发现网卡设备" else "发现 ${devices.size} 个网卡"
+        }
+    }
 
     override fun onCleared() {
         super.onCleared()

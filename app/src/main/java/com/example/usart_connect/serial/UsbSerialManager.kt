@@ -107,6 +107,7 @@ class UsbSerialManager(private val context: Context) : SerialConnection {
         val availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager)
         for (driver in availableDrivers) {
             val device = driver.device
+            if (!mightBeSerialDevice(device)) continue
             foundDeviceNames.add(device.deviceName)
             val name = device.productName ?: device.deviceName
             val vidPid = "VID:%04X PID:%04X".format(device.vendorId, device.productId)
@@ -120,6 +121,8 @@ class UsbSerialManager(private val context: Context) : SerialConnection {
         // 2. 扫描所有 USB 设备，尝试识别未被默认探针找到的串口芯片
         for ((_, usbDevice) in usbManager.deviceList) {
             if (foundDeviceNames.contains(usbDevice.deviceName)) continue
+            // 跳过非串口设备（网卡、HID等）
+            if (!mightBeSerialDevice(usbDevice)) continue
             val driver = probeDevice(usbDevice)
             if (driver != null) {
                 foundDeviceNames.add(usbDevice.deviceName)
@@ -133,9 +136,10 @@ class UsbSerialManager(private val context: Context) : SerialConnection {
             }
         }
 
-        // 3. 如果还没找到，列出所有 USB 设备（VID/PID）方便调试
+        // 3. 如果还没找到，列出可能是串口的 USB 设备（VID/PID）方便调试
         if (devices.isEmpty()) {
             for ((_, usbDevice) in usbManager.deviceList) {
+                if (!mightBeSerialDevice(usbDevice)) continue
                 val name = usbDevice.productName ?: usbDevice.deviceName
                 val vidPid = "VID:%04X PID:%04X".format(usbDevice.vendorId, usbDevice.productId)
                 devices.add(DeviceItem(
@@ -147,6 +151,36 @@ class UsbSerialManager(private val context: Context) : SerialConnection {
         }
 
         return devices
+    }
+
+    // 已知非串口设备 VID 黑名单（网卡、HID等）
+    private val BLACKLIST_VIDS = setOf(
+        0x0BDA,  // Realtek（网卡）
+        0x0424,  // Microchip/SMSC（Hub/网卡）
+        0x0A5C,  // Broadcom（蓝牙/网卡）
+        0x0846,  // NetGear（网卡）
+        0x0B95,  // ASIX（USB网卡芯片）
+        0x07D1,  // D-Link（网卡）
+        0x050D,  // Belkin（网卡）
+        0x17EF,  // Lenovo（部分设备）
+        0x046D,  // Logitech（HID设备）
+    )
+
+    private fun mightBeSerialDevice(device: UsbDevice): Boolean {
+        // 黑名单直接排除
+        if (device.vendorId in BLACKLIST_VIDS) return false
+
+        // 检查是否有串口相关的接口类
+        var hasSerialInterface = false
+        for (i in 0 until device.interfaceCount) {
+            val iface = device.getInterface(i)
+            val cls = iface.interfaceClass
+            // 0x0A = CDC Data（串口数据接口），0xFF = Vendor Specific（CH340等国产芯片）
+            if (cls == 0x0A || cls == 0xFF) hasSerialInterface = true
+            // 0x0D = RNDIS（USB网络共享），0x0E = CDC ECM（USB以太网）
+            if (cls == 0x0D || cls == 0x0E) return false
+        }
+        return hasSerialInterface
     }
 
     private fun probeDevice(device: UsbDevice): UsbSerialDriver? {
