@@ -90,18 +90,22 @@ fun SerialScreen(vm: SerialViewModel = viewModel()) {
     if (isLandscape) {
         // 横屏：左右布局
         Row(modifier = Modifier.fillMaxSize().padding(padding)) {
-            // 左侧：连接 + 参数 + 快捷指令 + 网卡 + 发送（可滚动）
+            // 左侧：连接 + 参数&快捷指令 + 网卡 + 发送（可滚动）
             Column(modifier = Modifier.weight(0.4f).fillMaxHeight().verticalScroll(rememberScrollState())) {
                 ConnectionCard(connectionType, devices, selectedDevice, isConnected, statusMessage,
                     { if (connectionType == ConnectionTypes.BLUETOOTH) checkBtAndScan() else vm.scanDevices() },
                     { vm.setConnectionType(it) }, { vm.selectDevice(it) }, { vm.connect() }, { vm.disconnect() },
                     showNetworkPanel, { vm.toggleNetworkPanel() })
                 Spacer(Modifier.height(cardSpacing))
-                ConfigCard(serialConfig, isConnected, showConfigPanel, { showConfigPanel = it }) { vm.updateConfig(it) }
-                Spacer(Modifier.height(cardSpacing))
-                QuickCommandCard(quickCommands, isConnected,
-                    { vm.sendQuickCommand(it) }, { vm.addQuickCommand(it.name, it.command, it.isHex) }, { vm.removeQuickCommand(it) },
-                    { vm.exportCommands() }, { vm.importCommands(it) })
+                // 串口参数和快捷指令左右并排
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(cardSpacing)) {
+                    ConfigCard(serialConfig, isConnected, showConfigPanel, { showConfigPanel = it },
+                        modifier = Modifier.weight(1f).defaultMinSize(minHeight = 120.dp)) { vm.updateConfig(it) }
+                    QuickCommandCard(quickCommands, isConnected,
+                        { vm.sendQuickCommand(it) }, { vm.addQuickCommand(it.name, it.command, it.isHex) }, { vm.removeQuickCommand(it) },
+                        { vm.exportCommands() }, { vm.importCommands(it) },
+                        modifier = Modifier.weight(1f).defaultMinSize(minHeight = 120.dp))
+                }
                 Spacer(Modifier.height(cardSpacing))
                 if (showNetworkPanel) {
                     NetworkCard(networkDevices) { vm.scanNetworkDevices() }
@@ -123,11 +127,15 @@ fun SerialScreen(vm: SerialViewModel = viewModel()) {
                 { vm.setConnectionType(it) }, { vm.selectDevice(it) }, { vm.connect() }, { vm.disconnect() },
                 showNetworkPanel, { vm.toggleNetworkPanel() })
             Spacer(Modifier.height(cardSpacing))
-            ConfigCard(serialConfig, isConnected, showConfigPanel, { showConfigPanel = it }) { vm.updateConfig(it) }
-            Spacer(Modifier.height(cardSpacing))
-            QuickCommandCard(quickCommands, isConnected,
-                { vm.sendQuickCommand(it) }, { vm.addQuickCommand(it.name, it.command, it.isHex) }, { vm.removeQuickCommand(it) },
-                { vm.exportCommands() }, { vm.importCommands(it) })
+            // 串口参数和快捷指令左右并排
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(cardSpacing)) {
+                ConfigCard(serialConfig, isConnected, showConfigPanel, { showConfigPanel = it },
+                    modifier = Modifier.weight(1f).defaultMinSize(minHeight = 120.dp)) { vm.updateConfig(it) }
+                QuickCommandCard(quickCommands, isConnected,
+                    { vm.sendQuickCommand(it) }, { vm.addQuickCommand(it.name, it.command, it.isHex) }, { vm.removeQuickCommand(it) },
+                    { vm.exportCommands() }, { vm.importCommands(it) },
+                    modifier = Modifier.weight(1f).defaultMinSize(minHeight = 120.dp))
+            }
             Spacer(Modifier.height(cardSpacing))
             if (showNetworkPanel) {
                 NetworkCard(networkDevices) { vm.scanNetworkDevices() }
@@ -212,63 +220,101 @@ private fun ConnectionCard(
 private fun ConfigCard(
     config: SerialConfig,
     isConnected: Boolean,
-    expanded: Boolean = true,
+    expanded: Boolean = false,
     onExpandedChange: (Boolean) -> Unit = {},
+    modifier: Modifier = Modifier,
     onConfigChange: (SerialConfig) -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(modifier = modifier) {
         Column(modifier = Modifier.padding(10.dp)) {
+            // 标题行：串口参数 + 设置按钮
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Text("串口参数", style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = { onExpandedChange(!expanded) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    Text(if (expanded) "收起" else "展开", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { onExpandedChange(true) }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                    Text("设置", style = MaterialTheme.typography.bodySmall)
                 }
             }
-            if (expanded) {
-                Spacer(Modifier.height(6.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // 当前配置摘要
+            Text("${config.baudRate}/${config.dataBits}/${StopBitsValues.labelOf(config.stopBits)}/${ParityValues.labelOf(config.parity)}",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+
+    // 设置弹窗
+    if (expanded) {
+        AlertDialog(
+            onDismissRequest = { onExpandedChange(false) },
+            title = { Text("串口参数设置") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // 波特率
                     var baudExpanded by remember { mutableStateOf(false) }
+                    var baudText by remember { mutableStateOf(config.baudRate.toString()) }
                     val baudRates = listOf(300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600)
-                    ExposedDropdownMenuBox(baudExpanded, { baudExpanded = it && !isConnected }, Modifier.weight(1f)) {
-                        OutlinedTextField(value = config.baudRate.toString(), onValueChange = { it.toIntOrNull()?.let { v -> onConfigChange(config.copy(baudRate = v)) } },
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = baudText,
+                            onValueChange = { new ->
+                                baudText = new
+                                new.toIntOrNull()?.let { v -> onConfigChange(config.copy(baudRate = v)) }
+                            },
                             label = { Text("波特率") }, enabled = !isConnected, singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(baudExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
-                        ExposedDropdownMenu(baudExpanded, { baudExpanded = false }) {
-                            for (r in baudRates) DropdownMenuItem(text = { Text(r.toString()) }, onClick = { onConfigChange(config.copy(baudRate = r)); baudExpanded = false })
+                            trailingIcon = {
+                                IconButton(onClick = { baudExpanded = !baudExpanded }, enabled = !isConnected) {
+                                    Text("▼", style = MaterialTheme.typography.bodySmall)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            textStyle = MaterialTheme.typography.bodySmall
+                        )
+                        DropdownMenu(expanded = baudExpanded, onDismissRequest = { baudExpanded = false }) {
+                            for (r in baudRates) DropdownMenuItem(text = { Text(r.toString()) }, onClick = {
+                                baudText = r.toString()
+                                onConfigChange(config.copy(baudRate = r))
+                                baudExpanded = false
+                            })
                         }
                     }
+                    // 数据位
                     var dbExpanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(dbExpanded, { dbExpanded = it && !isConnected }, Modifier.weight(1f)) {
+                    ExposedDropdownMenuBox(dbExpanded, { dbExpanded = it && !isConnected }, Modifier.fillMaxWidth()) {
                         OutlinedTextField(value = config.dataBits.toString(), onValueChange = {}, readOnly = true, label = { Text("数据位") }, enabled = !isConnected,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(dbExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(dbExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            textStyle = MaterialTheme.typography.bodySmall)
                         ExposedDropdownMenu(dbExpanded, { dbExpanded = false }) {
                             for (v in DataBitsValues.ALL) DropdownMenuItem(text = { Text(v.toString()) }, onClick = { onConfigChange(config.copy(dataBits = v)); dbExpanded = false })
                         }
                     }
-                }
-                Spacer(Modifier.height(6.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // 停止位
                     var sbExpanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(sbExpanded, { sbExpanded = it && !isConnected }, Modifier.weight(1f)) {
+                    ExposedDropdownMenuBox(sbExpanded, { sbExpanded = it && !isConnected }, Modifier.fillMaxWidth()) {
                         OutlinedTextField(value = StopBitsValues.labelOf(config.stopBits), onValueChange = {}, readOnly = true, label = { Text("停止位") }, enabled = !isConnected,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(sbExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(sbExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            textStyle = MaterialTheme.typography.bodySmall)
                         ExposedDropdownMenu(sbExpanded, { sbExpanded = false }) {
                             for (v in StopBitsValues.ALL) DropdownMenuItem(text = { Text(StopBitsValues.labelOf(v)) }, onClick = { onConfigChange(config.copy(stopBits = v)); sbExpanded = false })
                         }
                     }
+                    // 校验位
                     var pExpanded by remember { mutableStateOf(false) }
-                    ExposedDropdownMenuBox(pExpanded, { pExpanded = it && !isConnected }, Modifier.weight(1f)) {
+                    ExposedDropdownMenuBox(pExpanded, { pExpanded = it && !isConnected }, Modifier.fillMaxWidth()) {
                         OutlinedTextField(value = ParityValues.labelOf(config.parity), onValueChange = {}, readOnly = true, label = { Text("校验位") }, enabled = !isConnected,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(pExpanded) }, modifier = Modifier.menuAnchor(), textStyle = MaterialTheme.typography.bodySmall)
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(pExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            textStyle = MaterialTheme.typography.bodySmall)
                         ExposedDropdownMenu(pExpanded, { pExpanded = false }) {
                             for (v in ParityValues.ALL) DropdownMenuItem(text = { Text(ParityValues.labelOf(v)) }, onClick = { onConfigChange(config.copy(parity = v)); pExpanded = false })
                         }
                     }
                 }
+            },
+            confirmButton = {
+                TextButton(onClick = { onExpandedChange(false) }) {
+                    Text("确定")
+                }
             }
-        }
+        )
     }
 }
 
@@ -373,50 +419,61 @@ private fun QuickCommandCard(
     onAdd: (QuickCommand) -> Unit,
     onRemove: (Long) -> Unit,
     onExport: () -> String,
-    onImport: (String) -> Int
+    onImport: (String) -> Int,
+    modifier: Modifier = Modifier
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var editingCommand by remember { mutableStateOf<QuickCommand?>(null) }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    Card(modifier = modifier) {
         Column(modifier = Modifier.padding(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("快捷指令", style = MaterialTheme.typography.labelMedium)
+                Text("指令", style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = { showAddDialog = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                    Text("+ 添加", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { showAddDialog = true }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+                    Text("+", style = MaterialTheme.typography.bodySmall)
                 }
-                TextButton(onClick = { showImportDialog = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                TextButton(onClick = { showImportDialog = true }, contentPadding = PaddingValues(horizontal = 4.dp)) {
                     Text("导入", style = MaterialTheme.typography.bodySmall)
                 }
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(4.dp))
             if (commands.isEmpty()) {
-                Text("暂无快捷指令，点击添加", style = MaterialTheme.typography.bodySmall,
+                Text("暂无指令", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
             } else {
                 LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     items(commands, key = { it.id }) { cmd ->
-                        AssistChip(
-                            onClick = { if (isConnected) onSend(cmd) },
-                            label = { Text(cmd.name, style = MaterialTheme.typography.bodySmall, maxLines = 1) },
-                            modifier = Modifier.combinedClickable(
-                                onClick = { if (isConnected) onSend(cmd) },
-                                onLongClick = { editingCommand = cmd }
-                            ),
-                            enabled = isConnected,
-                            trailingIcon = {
-                                Text(
-                                    if (cmd.isHex) "HEX" else "TXT",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                        var showMenu by remember { mutableStateOf(false) }
+                        Box(modifier = Modifier.wrapContentSize()) {
+                            FilterChip(
+                                selected = false,
+                                onClick = { showMenu = true },
+                                label = { Text(cmd.name, style = MaterialTheme.typography.bodySmall, maxLines = 1) },
+                                trailingIcon = {
+                                    Text(
+                                        if (cmd.isHex) "HEX" else "TXT",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            )
+                            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("发送") },
+                                    onClick = { if (isConnected) onSend(cmd); showMenu = false }
+                                )
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                                    onClick = { onRemove(cmd.id); showMenu = false }
                                 )
                             }
-                        )
+                        }
                     }
                 }
             }
