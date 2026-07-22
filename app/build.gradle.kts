@@ -47,10 +47,6 @@ ktlint {
     version.set("1.2.1")
     android.set(true)
     ignoreFailures.set(false)
-    reporters {
-        reporter(ReporterType.PLAIN)
-        reporter(ReporterType.CHECKSTYLE)
-    }
 }
 
 dependencies {
