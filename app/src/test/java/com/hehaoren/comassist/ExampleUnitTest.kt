@@ -1,4 +1,4 @@
-package com.example.usart_connect
+package com.hehaoren.comassist
 
 import org.junit.Test
 

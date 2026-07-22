@@ -13,3 +13,13 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# 编译产物
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# 签名文件
+*.jks
+*.keystore

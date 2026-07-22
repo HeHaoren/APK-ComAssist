@@ -1,14 +1,16 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
+    id("io.gitlab.arturbosch.detekt")
+    id("org.jlleitschuh.gradle.ktlint")
 }
 
 android {
-    namespace = "com.example.usart_connect"
+    namespace = "com.hehaoren.comassist"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.usart_connect"
+        applicationId = "com.hehaoren.comassist"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -32,6 +34,22 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+}
+
+detekt {
+    config.setFrom("$rootDir/config/detekt/detekt.yml")
+    buildUponDefaultConfig = true
+    allRules = false
+}
+
+ktlint {
+    version.set("1.2.1")
+    android.set(true)
+    ignoreFailures.set(false)
+    reporters {
+        reporter(ReporterType.PLAIN)
+        reporter(ReporterType.CHECKSTYLE)
     }
 }
 

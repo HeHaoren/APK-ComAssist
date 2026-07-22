@@ -1,30 +1,61 @@
-package com.example.usart_connect.serial
+package com.hehaoren.comassist.serial
 
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import java.net.NetworkInterface
 
-/** 网卡设备信息 */
+/**
+ * 网卡设备信息数据类
+ *
+ * 包含网络接口的详细配置信息
+ *
+ * @property name 接口名称（如 eth0, wlan0）
+ * @property displayName 用户友好的显示名称
+ * @property macAddress MAC 地址
+ * @property ipAddresses IPv4 地址列表
+ * @property ipv6Addresses IPv6 地址列表
+ * @property subnetMasks 子网掩码列表
+ * @property gateway 默认网关地址
+ * @property dnsServers DNS 服务器列表
+ * @property isUp 接口是否启用
+ * @property isLoopback 是否为回环接口
+ * @property mtu 最大传输单元
+ * @property vendorId USB 设备厂商 ID（仅 USB 网卡）
+ * @property productId USB 设备产品 ID（仅 USB 网卡）
+ */
 data class NetworkDeviceInfo(
-    val name: String,           // 接口名 (eth0, wlan0 等)
-    val displayName: String,    // 显示名称
-    val macAddress: String,     // MAC 地址
-    val ipAddresses: List<String>,  // IPv4 地址
-    val ipv6Addresses: List<String>, // IPv6 地址
-    val subnetMasks: List<String>,  // 子网掩码
-    val gateway: String,        // 网关
-    val dnsServers: List<String>,   // DNS 服务器
-    val isUp: Boolean,          // 是否启用
-    val isLoopback: Boolean,    // 是否回环
-    val mtu: Int,               // MTU
-    val vendorId: String,       // USB 设备 VID (如果是 USB 网卡)
-    val productId: String       // USB 设备 PID (如果是 USB 网卡)
+    val name: String,
+    val displayName: String,
+    val macAddress: String,
+    val ipAddresses: List<String>,
+    val ipv6Addresses: List<String>,
+    val subnetMasks: List<String>,
+    val gateway: String,
+    val dnsServers: List<String>,
+    val isUp: Boolean,
+    val isLoopback: Boolean,
+    val mtu: Int,
+    val vendorId: String,
+    val productId: String
 )
 
+/**
+ * 网络管理器
+ *
+ * 负责扫描和获取设备网络接口信息
+ *
+ * @param context Android 上下文
+ */
 class NetworkManager(private val context: Context) {
 
-    /** 扫描所有网络接口 */
+    /**
+     * 扫描所有网络接口
+     *
+     * 遍历设备上所有活跃的网络接口，收集其配置信息
+     *
+     * @return 网络设备信息列表
+     */
     fun scanNetworkDevices(): List<NetworkDeviceInfo> {
         val devices = mutableListOf<NetworkDeviceInfo>()
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -107,6 +138,12 @@ class NetworkManager(private val context: Context) {
         return devices
     }
 
+    /**
+     * 获取网络接口的用户友好显示名称
+     *
+     * @param name 接口名称
+     * @return 用户友好的显示名称
+     */
     private fun getDisplayName(name: String): String = when {
         name.startsWith("wlan") -> "WiFi ($name)"
         name.startsWith("eth") -> "以太网 ($name)"
@@ -117,6 +154,12 @@ class NetworkManager(private val context: Context) {
         else -> name
     }
 
+    /**
+     * 获取网络接口的 MAC 地址
+     *
+     * @param iface 网络接口
+     * @return 格式化的 MAC 地址字符串，获取失败返回 "未知"
+     */
     private fun getMacAddress(iface: NetworkInterface): String {
         return try {
             val mac = iface.hardwareAddress ?: return "未知"
@@ -124,6 +167,12 @@ class NetworkManager(private val context: Context) {
         } catch (_: Exception) { "未知" }
     }
 
+    /**
+     * 将前缀长度转换为子网掩码
+     *
+     * @param prefixLength CIDR 前缀长度（0-32）
+     * @return 点分十进制格式的子网掩码
+     */
     private fun prefixLengthToSubnetMask(prefixLength: Int): String {
         if (prefixLength < 0 || prefixLength > 32) return "未知"
         val mask = (0xFFFFFFFF.toInt() shl (32 - prefixLength))
